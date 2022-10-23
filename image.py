@@ -95,11 +95,19 @@ class TwinitImage:
         self.get_cards()
 
 
-
 class Card:
     def __init__(self, image_belonged, coords, game):
         self.image_belonged = image_belonged
         self.coords = coords
+
+        card_weight_size = np.max(coords[:, 0]) - np.min(coords[:, 0])
+        card_height_size = np.max(coords[:, 1]) - np.min(coords[:, 1])
+        self.yolo_bbox = [
+            (np.min(coords[:, 0]) + card_weight_size/2) / image_belonged.image.shape[1],
+            (np.min(coords[:, 1]) + card_height_size/2) / image_belonged.image.shape[0],
+            card_weight_size / image_belonged.image.shape[1],
+            card_height_size / image_belonged.image.shape[0]
+        ]
 
         self.cropped = None
         self.straighten_card = None
