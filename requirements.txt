@@ -1,0 +1,17 @@
+opencv-python==4.5.1.48
+numpy==1.18.5
+torch==1.11.0+cu113
+thop==0.1.1.post2209072238
+pandas==1.1.4
+requests==2.28.1
+torchvision==0.12.0+cu113
+Pillow==9.2.0
+PyYAML==6.0
+matplotlib==3.2.2
+seaborn==0.12.1
+scipy==1.9.1
+onnx==1.13.0
+tqdm==4.64.1
+wandb==0.13.5
+scikit-learn==1.1.2
+plotly==5.11.0

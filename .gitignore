@@ -17,3 +17,5 @@ siamese/experiments2/
 
 siamese/wandb/
 siamese/experiments/
+
+*.zip
