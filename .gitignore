@@ -7,3 +7,13 @@ twinit-dataset/
 results/
 tmp/
 
+
+classification/experiments/
+classification/wandb/
+
+siamese/experiments1/
+
+siamese/experiments2/
+
+siamese/wandb/
+siamese/experiments/

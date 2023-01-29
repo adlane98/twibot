@@ -3,9 +3,11 @@ from pathlib import Path
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 from game import Game
 from utils import read_image, show_image
+from yolov7.utils.general import non_max_suppression
 
 
 class TwinitImage:
@@ -91,8 +93,16 @@ class TwinitImage:
         return res_image
 
     def segment_cards(self):
-        self.get_contours()
-        self.get_cards()
+        img = torch.from_numpy(np.transpose(self.image, (2, 0, 1))).to(self.game.device) / 255.0
+        if img.ndimension() == 3:
+            img = img.unsqueeze(0)
+
+        with torch.no_grad():   # Calculating gradients would cause a GPU memory leak
+            pred = self.game.model(img, augment=True)[0]
+        pred = non_max_suppression(pred, 0.25, 0.45, classes=0)
+        print(pred)
+        # self.get_contours()
+        # self.get_cards()
 
 
 class Card:
