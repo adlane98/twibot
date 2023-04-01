@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from game import Game
-from utils import read_image, show_image
+from io_image import read_image, show_image
 from yolov7.utils.general import non_max_suppression
 
 

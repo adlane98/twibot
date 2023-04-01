@@ -18,8 +18,27 @@ from game import Game
 from image import TwinitImage, compute_card_diff
 from models.common import Conv
 from models.experimental import Ensemble
-from utils import read_image, show_image
-from yolov7.utils.general import non_max_suppression
+from io_image import read_image, show_image
+from yolov7.utils.general import non_max_suppression, scale_coords
+from yolov7.utils.datasets import LoadImages
+from yolov7.utils.plots import plot_one_box
+
+colors_hex = [
+    "#c71585",
+    "#0000cd",
+    "#00ff00",
+    "#ffff00",
+    "#ff4500",
+    "#2f4f4f",
+    "#228b22",
+    "#00ffff",
+    "#1e90ff",
+    "#ffdead"
+]
+colors_rgb = []
+for c in colors_hex:
+    c = c.lstrip("#")
+    colors_rgb.append(tuple(int(c[i:i+2], 16) for i in (0, 2, 4)))
 
 
 def test_main():
@@ -115,19 +134,15 @@ def save_tensor(device, my_tensor):
 
 
 def twibot():
-    # source = Path(r"E:\twibot\twinit-dataset\DSC_3686.MOV")
-    source = Path(r"E:\twibot\twinit-dataset\video-9")
+    source = Path(r"/home/adlane/projets/twinit-dataset/dsc_3686.mp4")
     weight = Path(
-        r"E:\twibot\yolov7\runs\train\yolov7-tiny-with-arm13\weights\best.pt"
+        r"/home/adlane/projets/twibot-weights/card-detection/yolov7.pt"
     )
 
     # Load model
-    model = Ensemble()
-    ckpt = torch.load(weight, map_location="cpu")  # load
+    ckpt = torch.load(weight)  # load
 
     model = ckpt["model"].float().eval()
-    # model.append(
-    #     ckpt['ema' if ckpt.get('ema') else 'model'].float().fuse().eval())
 
     for m in model.modules():
         if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:
@@ -138,151 +153,114 @@ def twibot():
             m._non_persistent_buffers_set = set()  # pytorch 1.6.0 compatibility
 
     # Warmup
-    example = torch.rand(1, 3, 384, 640)
-    out = model(example)[0]
-    out = non_max_suppression(out, 0.25, 0.45, classes=[0])
-    # traced_script_module = torch_utils.TracedModel(model, device="cpu", img_size=(384,640))
-
-    # traced_script_module = torch.jit.trace(model, example, strict=False)
-    # traced_script_module.model.save(r"E:\twibot\yolov7\runs\train\yolov7-tiny-with-arm13\weights\traced_yolov7_model.pt")
-    # out = traced_script_module(example)
+    example = torch.rand(1, 3, 384, 640).cuda()
+    _ = model(example)[0]
 
     # Load sift
     sift = cv2.SIFT_create()
 
     # Load matcher
     FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=3)
     search_params = dict(checks=50)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-    # Loading video
-    # video = cv2.VideoCapture(str(source))
+    #Load video
+    dataset_video = LoadImages(source, img_size=640)
 
     # Get frames
     frames_gray = list()
-    success = True
-    nb_frames = 0
     new_frames = []
-    # while success:
-    for image_path in source.glob("*.jpg"):
-        image_path = Path(r"E:\\twibot\\twinit-dataset\\video-8\\9.jpg")
+    metadata_flag = False
+    for path, img, im0s, vid_cap in dataset_video:
         start = time.time()
 
-        # success, frame = video.read()
-        frame = cv2.imread(str(image_path))
-        # frames_gray.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-        nb_frames += 1
-        print(f"{nb_frames} read")
+        img = torch.from_numpy(img).to("cuda")
+        img = img.float()  # uint8 to fp16/32
+        img /= 255.0  # 0 - 255 to 0.0 - 1.0
+        if img.ndimension() == 3:
+            img = img.unsqueeze(0)
 
-        # augmented frames
-        frame = cv2.resize(frame, (360, 640))
-        # frames_gray = np.array(frames_gray)
-
-        # transform frames to tensor
-        frame_chan_first = np.transpose(frame[None, ...], (0, 3, 2, 1))
-        frame_t = torch.Tensor(frame_chan_first)
-
-        # mettre a l'echelle les coords en fonction de l'augmentation
-        # frame_aug_t = T.Resize((360, 640))(frame_t)
-        frame_aug_t = F.pad(frame_t, (0, 0, 12, 12), mode="constant", value=114)
-
-        print(frame_aug_t.numpy().shape)
-
-        frame_aug_t /= 255
-        x_df = pd.DataFrame(frame_aug_t.numpy()[0, 1, ...])
-        x_df.to_csv(
-            'E:\\twibot\\twinit-dataset\\debug\\python1.txt',
-            sep=";",
-            header=False,
-            index=False,
-            float_format='%.6f'
-        )
-
-        print(frame_aug_t[0, 0, 150, 458])
-        save_tensor("cpu", frame_aug_t)
+        if not metadata_flag:
+            fps = vid_cap.get(cv2.CAP_PROP_FPS)
+            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            vid_writer = cv2.VideoWriter(fr"/home/adlane/projets/twibot/debug/output.mp4",
+                                         cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+            metadata_flag = True
 
         # call model
-        pred = model.forward(frame_aug_t)[0]
-        pred = non_max_suppression(pred, 0.25, 0.45, classes=[0])
-        pred = pred[0][:, :4]
+        with torch.no_grad():   # Calculating gradients would cause a GPU memory leak
+            pred = model(img, augment=False)[0]
+        pred = non_max_suppression(pred, 0.25, 0.45, classes=[0])[0]
 
-        pred -= torch.Tensor([0, 12, 0, 12]).cuda().int()
-        pred = torch.clip(pred.int(), 0, None)
-        pred *= 2
+        if len(pred):
+            # Rescale boxes from img_size to im0 size
+            pred[:, :4] = scale_coords(img.shape[2:], pred[:, :4], im0s.shape).round()
 
-        # extraction des cartes
-        cards = []
-        kps = []
-        dess = []
-        i = 0
-        for coord in pred:
-            card = frame[coord[1]:coord[3], coord[0]:coord[2], :]
-            cv2.imwrite(str(source / "cards" / f"{image_path.stem}-{i}.jpg"), card)
+            # extraction des cartes
+            cards = []
+            kps = []
+            dess = []
+            xyxys = []
+            for *xyxy, conf, cls in reversed(pred):
+                xyxy = [elem.int() for elem in xyxy]
+                card = im0s[xyxy[1]:xyxy[3], xyxy[0]:xyxy[2], :]
+                cards.append(card)
+                xyxys.append(xyxy)
 
-            # card = cv2.cvtColor(card, cv2.COLOR_BGR2GRAY)
+                # calcul des descripteurs sift
+                kp1, des1 = sift.detectAndCompute(card, None)
+                kps.append(kp1)
+                dess.append(des1)
 
-            i += 1
-            # card = cv2.cvtColor(card, cv2.COLOR_RGB2GRAY)
-            # card = cv2.resize(card, (128, 128))
+            # faire les paires de cartes
+            pairs_saved = []
+            for pair_id in itertools.combinations(range(len(pred)), r=2):
+                kp1 = kps[pair_id[0]]
+                kp2 = kps[pair_id[1]]
 
-            # cards.append(card)
+                if dess[pair_id[0]] is None or dess[pair_id[1]] is None:
+                    continue
 
-            # resize des cartes
+                if len(kp1) < 2 or len(kp2) < 2:
+                    continue
 
-            # calcul des descripteurs sift
-            # kp1, des1 = sift.detectAndCompute(card, None)
-            # kps.append(kp1)
-            # dess.append(des1)
+                matches = flann.knnMatch(dess[pair_id[0]], dess[pair_id[1]], k=2)
+                good = []
+                for m, n in matches:
+                    if m.distance < 0.4 * n.distance:
+                        good.append(m)
 
-        # faire les paires de cartes
-    #     pairs_saved = []
-    #     for pair_id in itertools.combinations(range(len(pred)), r=2):
-    #         kp1 = kps[pair_id[0]]
-    #         kp2 = kps[pair_id[1]]
-    #
-    #         matches = flann.knnMatch(dess[pair_id[0]], dess[pair_id[1]], k=2)
-    #
-    #         good = []
-    #         for m, n in matches:
-    #             if m.distance < 0.7 * n.distance:
-    #                 good.append(m)
-    #
-    #         # sauvegarder les bonnes paires
-    #         if len(good) > 50:
-    #
-    #             src_pts = np.float32(
-    #                 [kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    #             dst_pts = np.float32(
-    #                 [kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-    #             M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-    #
-    #             if M is not None:
-    #                 pairs_saved.append(pair_id)
-    #
-    #     # print(pairs_saved)
-    #
-    #     new_frame = frame
-    #     for (p1, p2) in pairs_saved:
-    #         for p in p1, p2:
-    #             new_frame = cv2.rectangle(
-    #                 new_frame,
-    #                 (pred[p, 0], pred[p, 1]),
-    #                 (pred[p, 2], pred[p, 3]),
-    #                 color=(0, 255, 0),
-    #                 thickness=2
-    #             )
-    #
-    #     new_frames.append(new_frame)
-    #     end = time.time()
-    #     print(f"Processing time = {end - start}")
-    #
-    # out = cv2.VideoWriter(fr"E:\twibot\twinit-dataset\debug\output.avi", cv2.VideoWriter_fourcc(*'DIVX'), 25.0, (1280, 720))
-    #
-    # for frame in new_frames:
-    #     out.write(frame)
-    #     # When everything done, release the video capture and video write objects
-    # out.release()
+                # sauvegarder les bonnes paires
+                if len(good) > 5:
+
+                    src_pts = np.float32(
+                        [kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+                    dst_pts = np.float32(
+                        [kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+                    M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+                    if M is not None:
+                        pairs_saved.append(pair_id)
+
+            print(pairs_saved)
+
+            for c, (p1, p2) in enumerate(pairs_saved):
+                for p in p1, p2:
+                    try:
+                        plot_one_box(xyxys[p], im0s, label="", color=colors_rgb[c], line_thickness=5)
+                    except IndexError:
+                        pass
+                    
+
+        end = time.time()
+        print(f"Processing time = {end - start}")
+
+        vid_writer.write(im0s)
+
+    vid_writer.release()
+    vid_cap.release()
 
 if __name__ == '__main__':
     # test_main()

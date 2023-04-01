@@ -3,7 +3,7 @@ from pathlib import Path
 import torch
 from sklearn.cluster import KMeans
 
-from utils import read_image
+from io_image import read_image
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.torch_utils import select_device
 
