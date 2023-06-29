@@ -153,8 +153,6 @@ int main(int argc, const char* argv[]) {
 
     // load matcher
     cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
-//    matcher->knnMatch( descriptors1, descriptors2, knn_matches, 2 );
-
 
     if (ext == ".jpg") {
         cv::Mat img = cv::imread(source);
@@ -184,10 +182,12 @@ int main(int argc, const char* argv[]) {
         cv::VideoWriter videoOutput(output_path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 50, cv::Size(1280, 720));
 
         int count = 0;
-
+        std::vector<pair_t> currentPairs;
+        DetectionMatrix currentResults;
         while (true) {
             count++;
             std::cout << count << std::endl;
+
             cv::Mat frame;
             video >> frame;
 
@@ -196,83 +196,77 @@ int main(int argc, const char* argv[]) {
                 break;
             }
 
-            // TODO : gerer le cas ou c'est la main qui est détectee
-            DetectionMatrix result = detector.Run(frame, conf_thres, iou_thres);
-            std::vector<Detection> cardResults {};
-            unsigned long nbCards = result.size();
-            if (nbCards > 30 || nbCards == 0) continue;
-            for (const auto& r: result[0]) {
-                if (r.class_idx == 0)
-                    cardResults.push_back(r);
-            }
-            nbCards = cardResults.size();
-            if (nbCards == 0) continue;
-            bool *alreadyComputed{ new bool[nbCards]{false} };
-            std::vector<cv::KeyPoint> *kps{ new std::vector<cv::KeyPoint>[nbCards]};
-            cv::Mat *dss{ new cv::Mat[nbCards]};
-
-            std::vector<pair_t> pairs;
-
-            for (int i = 0; i < nbCards; i++) {
-                std::vector<cv::KeyPoint> kpi;
-                cv::Mat dsi;
-                if (!alreadyComputed[i]) {
-                    sift->detectAndCompute(frame(cardResults[i].bbox), cv::Mat(), kpi, dsi);
-                    alreadyComputed[i] = true;
-                    kps[i] = kpi;
-                    dss[i] = dsi;
+            if (count % 5 == 4) {
+                currentPairs.clear();
+                currentResults = detector.Run(frame, conf_thres, iou_thres);
+                std::vector<Detection> cardResults {};
+                unsigned long nbCards = currentResults.size();
+                if (nbCards > 30 || nbCards == 0) continue;
+                for (const auto& r: currentResults[0]) {
+                    if (r.class_idx == 0)
+                        cardResults.push_back(r);
                 }
-                else {
-                    kpi = kps[i];
-                    dsi = dss[i];
-                }
-                for (int j = i+1; j < nbCards; j++) {
-                    std::vector<cv::KeyPoint> kpj;
-                    cv::Mat dsj;
+                nbCards = cardResults.size();
+                if (nbCards == 0) continue;
+                bool *alreadyComputed{ new bool[nbCards]{false} };
+                std::vector<cv::KeyPoint> *kps{ new std::vector<cv::KeyPoint>[nbCards]};
+                cv::Mat *dss{ new cv::Mat[nbCards]};
 
-                    if (!alreadyComputed[j]) {
-                        sift->detectAndCompute(frame(cardResults[j].bbox), cv::Mat(), kpj, dsj);
-                        alreadyComputed[j] = true;
-                        kps[j] = kpj;
-                        dss[j] = dsj;
+                for (int i = 0; i < nbCards; i++) {
+                    std::vector<cv::KeyPoint> kpi;
+                    cv::Mat dsi;
+                    if (!alreadyComputed[i]) {
+                        sift->detectAndCompute(frame(cardResults[i].bbox), cv::Mat(), kpi, dsi);
+                        alreadyComputed[i] = true;
+                        kps[i] = kpi;
+                        dss[i] = dsi;
                     }
                     else {
-                        kpj = kps[j];
-                        dsj = dss[j];
+                        kpi = kps[i];
+                        dsi = dss[i];
                     }
+                    for (int j = i+1; j < nbCards; j++) {
+                        std::vector<cv::KeyPoint> kpj;
+                        cv::Mat dsj;
 
-                    std::vector< std::vector<cv::DMatch> > knn_matches;
+                        if (!alreadyComputed[j]) {
+                            sift->detectAndCompute(frame(cardResults[j].bbox), cv::Mat(), kpj, dsj);
+                            alreadyComputed[j] = true;
+                            kps[j] = kpj;
+                            dss[j] = dsj;
+                        }
+                        else {
+                            kpj = kps[j];
+                            dsj = dss[j];
+                        }
 
-                    if (dsi.data == nullptr || dsj.data == nullptr) {
-                        std::cout << "nullptr" << std::endl;
-                        continue;
-                    }
+                        std::vector< std::vector<cv::DMatch> > knn_matches;
 
-                    if (kpi.size() < 2 || kpj.size() < 2) {
-                        std::cout << "size" << std::endl;
-                        continue;
-                    }
+                        if (dsi.data == nullptr || dsj.data == nullptr) {
+                            std::cout << "nullptr" << std::endl;
+                            continue;
+                        }
 
-                    matcher->knnMatch( dsi, dsj, knn_matches, 2 );
+                        if (kpi.size() < 2 || kpj.size() < 2) {
+                            std::cout << "size" << std::endl;
+                            continue;
+                        }
 
-                    const float ratio_thresh = 0.4f;
-                    int good_matches = 0;
-                    for (auto & knn_match_ : knn_matches)
-                        if (knn_match_[0].distance < ratio_thresh * knn_match_[1].distance)
-                            good_matches++;
+                        matcher->knnMatch( dsi, dsj, knn_matches, 2 );
 
-                    if (good_matches > 5) {
-                        pairs.push_back(pair_t{i, j});
+                        const float ratio_thresh = 0.4f;
+                        int good_matches = 0;
+                        for (auto & knn_match_ : knn_matches)
+                            if (knn_match_[0].distance < ratio_thresh * knn_match_[1].distance)
+                                good_matches++;
+
+                        if (good_matches > 5) {
+                            currentPairs.push_back(pair_t{i, j});
+                        }
                     }
                 }
-
-
             }
-            for (const auto& detection : cardResults) {
-                cv::imwrite("/home/adlane/projets/twibot/twibotcpp/debug/image.jpg", frame(detection.bbox));
-            }
-            cv::Mat resultWithDet = drawDetections(frame, result, pairs);
-
+            cv::Mat resultWithDet = drawDetections(frame, currentResults, currentPairs);
             videoOutput.write(resultWithDet);
         }
 
