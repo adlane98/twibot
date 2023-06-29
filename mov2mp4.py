@@ -4,8 +4,8 @@ import os
 
 if __name__ == '__main__':
 
-    src = r'E:\twibot\twinit-dataset\videos'
-    dst = r'E:\twibot\twinit-dataset\mp4'
+    src = r'/home/adlane/projets/twinit-dataset/toconvert'
+    dst = r'/home/adlane/projets/twinit-dataset/toconvert/'
 
     for root, dirs, filenames in os.walk(src, topdown=False):
         #print(filenames)
