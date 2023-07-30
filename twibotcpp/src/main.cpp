@@ -52,10 +52,9 @@ cv::Mat& drawDetections(cv::Mat& img,
     return img;
 }
 
-// TODO !!
 cv::Mat& drawDetections(cv::Mat& img,
         const DetectionMatrix & detections,
-        const std::vector<pair_t>& pairs)
+        const std::vector<pair_t>* pairs)
 {
     cv::Scalar colors_hex[10]{
             cv::Scalar(0xc7, 0x15, 0x85),
@@ -70,10 +69,10 @@ cv::Mat& drawDetections(cv::Mat& img,
             cv::Scalar(0xff, 0xde, 0xad)
     };
 
-    if (!pairs.empty()) {
-        for (std::size_t pi = 0; pi < pairs.size(); pi++) {
-            const auto &box1 = detections[0][pairs[pi]._1].bbox;
-            const auto &box2 = detections[0][pairs[pi]._2].bbox;
+    if (!pairs->empty()) {
+        for (std::size_t pi = 0; pi < pairs->size(); pi++) {
+            const auto &box1 = detections[0][(*pairs)[pi]._1].bbox;
+            const auto &box2 = detections[0][(*pairs)[pi]._2].bbox;
 
             cv::rectangle(img, box1, colors_hex[pi], 2);
             cv::rectangle(img, box2, colors_hex[pi], 2);
@@ -89,6 +88,87 @@ void Demo(cv::Mat& img, const DetectionMatrix & detections) {
     cv::namedWindow("Result", cv::WINDOW_AUTOSIZE);
     cv::imshow("Result", img);
     cv::waitKey(0);
+}
+
+void Demo(cv::Mat& img, const DetectionMatrix & detections, const std::vector<pair_t> & pairs) {
+
+    img = drawDetections(img, detections, &pairs);
+
+    cv::namedWindow("Result", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Result", img);
+    cv::waitKey(0);
+}
+
+
+std::vector<pair_t> matchCards(DetectionMatrix& detectedCards, const cv::Ptr<cv::SiftFeatureDetector>& sift, cv::Mat& frame, const cv::Ptr<cv::DescriptorMatcher>& matcher) {
+    std::vector<Detection> cardResults {};
+    std::vector<pair_t> pairs {};
+    unsigned long nbCards = detectedCards.size();
+    if (nbCards > 30 || nbCards == 0) return pairs;
+    for (const auto& r: detectedCards[0]) {
+        if (r.class_idx == 0)
+            cardResults.push_back(r);
+    }
+    nbCards = cardResults.size();
+    if (nbCards < 2) return pairs;
+    bool *alreadyComputed{ new bool[nbCards]{false} };
+    std::vector<cv::KeyPoint> *kps{ new std::vector<cv::KeyPoint>[nbCards]};
+    cv::Mat *dss{ new cv::Mat[nbCards]};
+
+    for (int i = 0; i < nbCards; i++) {
+        std::vector<cv::KeyPoint> kpi;
+        cv::Mat dsi;
+        if (!alreadyComputed[i]) {
+            sift->detectAndCompute(frame(cardResults[i].bbox), cv::Mat(), kpi, dsi);
+            alreadyComputed[i] = true;
+            kps[i] = kpi;
+            dss[i] = dsi;
+        }
+        else {
+            kpi = kps[i];
+            dsi = dss[i];
+        }
+        for (int j = i+1; j < nbCards; j++) {
+            std::vector<cv::KeyPoint> kpj;
+            cv::Mat dsj;
+
+            if (!alreadyComputed[j]) {
+                sift->detectAndCompute(frame(cardResults[j].bbox), cv::Mat(), kpj, dsj);
+                alreadyComputed[j] = true;
+                kps[j] = kpj;
+                dss[j] = dsj;
+            }
+            else {
+                kpj = kps[j];
+                dsj = dss[j];
+            }
+
+            std::vector< std::vector<cv::DMatch> > knn_matches;
+
+            if (dsi.data == nullptr || dsj.data == nullptr) {
+                std::cout << "nullptr" << std::endl;
+                continue;
+            }
+
+            if (kpi.size() < 2 || kpj.size() < 2) {
+                std::cout << "size" << std::endl;
+                continue;
+            }
+
+            matcher->knnMatch( dsi, dsj, knn_matches, 2 );
+
+            const float ratio_thresh = 0.4f;
+            int good_matches = 0;
+            for (auto & knn_match_ : knn_matches)
+                if (knn_match_[0].distance < ratio_thresh * knn_match_[1].distance)
+                    good_matches++;
+
+            if (good_matches > 5) {
+                pairs.push_back(pair_t{i, j});
+            }
+        }
+    }
+    return pairs;
 }
 
 
@@ -163,10 +243,11 @@ int main(int argc, const char* argv[]) {
 
         // inference
         DetectionMatrix result = detector.Run(img, conf_thres, iou_thres);
+        std::vector<pair_t> pairsFound = matchCards(result, sift, img, matcher);
 
         // visualize detections
         if (opt["view-img"].as<bool>()) {
-            Demo(img, result);
+            Demo(img, result, pairsFound);
         }
     }
     else if (ext == ".mp4" || ext == ".MOV" || ext == ".avi"){
@@ -182,7 +263,8 @@ int main(int argc, const char* argv[]) {
         cv::VideoWriter videoOutput(output_path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 50, cv::Size(1280, 720));
 
         int count = 0;
-        std::vector<pair_t> currentPairs;
+        std::vector<pair_t>* currentPairs = nullptr;
+        std::vector<pair_t> pairsFound;
         DetectionMatrix currentResults;
         while (true) {
             count++;
@@ -197,75 +279,12 @@ int main(int argc, const char* argv[]) {
             }
 
             if (count % 5 == 4) {
-                currentPairs.clear();
+                if (currentPairs != nullptr) currentPairs->clear();
                 currentResults = detector.Run(frame, conf_thres, iou_thres);
-                std::vector<Detection> cardResults {};
-                unsigned long nbCards = currentResults.size();
-                if (nbCards > 30 || nbCards == 0) continue;
-                for (const auto& r: currentResults[0]) {
-                    if (r.class_idx == 0)
-                        cardResults.push_back(r);
-                }
-                nbCards = cardResults.size();
-                if (nbCards == 0) continue;
-                bool *alreadyComputed{ new bool[nbCards]{false} };
-                std::vector<cv::KeyPoint> *kps{ new std::vector<cv::KeyPoint>[nbCards]};
-                cv::Mat *dss{ new cv::Mat[nbCards]};
-
-                for (int i = 0; i < nbCards; i++) {
-                    std::vector<cv::KeyPoint> kpi;
-                    cv::Mat dsi;
-                    if (!alreadyComputed[i]) {
-                        sift->detectAndCompute(frame(cardResults[i].bbox), cv::Mat(), kpi, dsi);
-                        alreadyComputed[i] = true;
-                        kps[i] = kpi;
-                        dss[i] = dsi;
-                    }
-                    else {
-                        kpi = kps[i];
-                        dsi = dss[i];
-                    }
-                    for (int j = i+1; j < nbCards; j++) {
-                        std::vector<cv::KeyPoint> kpj;
-                        cv::Mat dsj;
-
-                        if (!alreadyComputed[j]) {
-                            sift->detectAndCompute(frame(cardResults[j].bbox), cv::Mat(), kpj, dsj);
-                            alreadyComputed[j] = true;
-                            kps[j] = kpj;
-                            dss[j] = dsj;
-                        }
-                        else {
-                            kpj = kps[j];
-                            dsj = dss[j];
-                        }
-
-                        std::vector< std::vector<cv::DMatch> > knn_matches;
-
-                        if (dsi.data == nullptr || dsj.data == nullptr) {
-                            std::cout << "nullptr" << std::endl;
-                            continue;
-                        }
-
-                        if (kpi.size() < 2 || kpj.size() < 2) {
-                            std::cout << "size" << std::endl;
-                            continue;
-                        }
-
-                        matcher->knnMatch( dsi, dsj, knn_matches, 2 );
-
-                        const float ratio_thresh = 0.4f;
-                        int good_matches = 0;
-                        for (auto & knn_match_ : knn_matches)
-                            if (knn_match_[0].distance < ratio_thresh * knn_match_[1].distance)
-                                good_matches++;
-
-                        if (good_matches > 5) {
-                            currentPairs.push_back(pair_t{i, j});
-                        }
-                    }
-                }
+                pairsFound = matchCards(currentResults, sift, frame, matcher);
+                currentPairs = &pairsFound;
             }
+            if (currentPairs == nullptr || currentPairs->empty()) continue;
             cv::Mat resultWithDet = drawDetections(frame, currentResults, currentPairs);
             videoOutput.write(resultWithDet);
         }
