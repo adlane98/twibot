@@ -52,6 +52,58 @@ cv::Mat& drawDetections(cv::Mat& img,
     return img;
 }
 
+template<typename T>
+std::vector<size_t> argsort(const std::vector<T> &array) {
+    std::vector<size_t> indices(array.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(),
+              [&array](int left, int right) -> bool {
+                  // sort indices according to corresponding array element
+                  return array[left] < array[right];
+              });
+
+    return indices;
+}
+
+int chooseColor(const cv::Mat& card) {
+    // Step 2: Convert the image to the HSV color space
+    cv::Mat hsvImage;
+    cvtColor(card, hsvImage, cv::COLOR_BGR2HSV);
+
+    // Step 3: Calculate the dominant color
+    // Prepare a histogram of the hue component
+    int hBins = 256; // Number of bins for hue (0-255)
+    int histSize[] = { hBins };
+    float hRanges[] = { 0, 256 };
+    const float* ranges[] = { hRanges };
+    cv::MatND hist;
+    int channels[] = { 0 }; // We are interested in the 0-th channel (hue)
+
+    calcHist(&hsvImage, 1, channels, cv::Mat(), hist, 1, histSize, ranges, true, false);
+
+    // Find the index of the most frequent hue value
+    double maxVal = 0;
+    int dominantHueIndex = 0;
+    for (int i = 1; i < hBins; ++i) {
+        double binValue = hist.at<float>(i);
+        if (binValue > maxVal) {
+            maxVal = binValue;
+            dominantHueIndex = i;
+        }
+    }
+
+    // The dominant color's hue value
+    return dominantHueIndex;
+}
+
+
+cv::Scalar ScalarHSV2BGR(uchar H, uchar S, uchar V) {
+    cv::Mat rgb;
+    cv::Mat hsv(1,1, CV_8UC3, cv::Scalar(H,S,V));
+    cv::cvtColor(hsv, rgb, cv::COLOR_HSV2BGR);
+    return cv::Scalar(rgb.data[0], rgb.data[1], rgb.data[2]);
+}
+
 cv::Mat& drawDetections(cv::Mat& img,
         const DetectionMatrix & detections,
         const std::vector<pair_t>* pairs)
@@ -70,12 +122,27 @@ cv::Mat& drawDetections(cv::Mat& img,
     };
 
     if (!pairs->empty()) {
-        for (std::size_t pi = 0; pi < pairs->size(); pi++) {
+        // choose color
+        std::vector<int> xCoordsToSort;
+        for (auto pair : *pairs) {
+            int xCard1 = detections[0][pair._1].bbox.x;
+            int xCard2 = detections[0][pair._2].bbox.x;
+            xCoordsToSort.push_back(std::max(xCard1, xCard2));
+        }
+
+        std::vector<size_t> indicesSorted = argsort(xCoordsToSort);
+
+        int countColor = 0;
+        for (auto pi: indicesSorted) {
             const auto &box1 = detections[0][(*pairs)[pi]._1].bbox;
             const auto &box2 = detections[0][(*pairs)[pi]._2].bbox;
 
-            cv::rectangle(img, box1, colors_hex[pi], 2);
-            cv::rectangle(img, box2, colors_hex[pi], 2);
+            /*uchar hue = (uchar) chooseColor(img(box1));
+            std::cout << +hue << std::endl;*/
+
+            cv::rectangle(img, box1, colors_hex[countColor], 2);
+            cv::rectangle(img, box2, colors_hex[countColor], 2);
+            countColor++;
         }
     }
     return img;
@@ -163,7 +230,7 @@ std::vector<pair_t> matchCards(DetectionMatrix& detectedCards, const cv::Ptr<cv:
                 if (knn_match_[0].distance < ratio_thresh * knn_match_[1].distance)
                     good_matches++;
 
-            if (good_matches > 5) {
+            if (good_matches > 15) {
                 pairs.push_back(pair_t{i, j});
             }
         }
@@ -234,7 +301,7 @@ int main(int argc, const char* argv[]) {
     // load matcher
     cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
 
-    if (ext == ".jpg") {
+    if (ext == ".jpg" || ext == ".png") {
         cv::Mat img = cv::imread(source);
         if (img.empty()) {
             std::cerr << "Error loading the image " << source << std::endl;
@@ -279,6 +346,7 @@ int main(int argc, const char* argv[]) {
             }
 
             if (count % 5 == 4) {
+                // cv::imwrite("../debug/colordebug/frame-" + std::to_string(count) + ".png", frame);
                 if (currentPairs != nullptr) currentPairs->clear();
                 currentResults = detector.Run(frame, conf_thres, iou_thres);
                 pairsFound = matchCards(currentResults, sift, frame, matcher);
