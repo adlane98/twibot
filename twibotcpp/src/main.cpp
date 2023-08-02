@@ -272,7 +272,7 @@ int main(int argc, const char* argv[]) {
     }
 
     // load class names from dataset for visualization
-    std::vector<std::string> class_names = LoadNames("../weights/card.names");
+    std::vector<std::string> class_names = LoadNames("../data/card.names");
     if (class_names.empty()) {
         return -1;
     }

@@ -13,7 +13,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 file(GLOB SOURCE_FILES src/*.cpp)
 
-#add_executable(twibotcpp main.cpp utils.cpp utils.h loadTensor.cpp loadTensor.h)
 add_executable(twibotcpp ${SOURCE_FILES})
 message("${OpenCV_LIBS}")
 
