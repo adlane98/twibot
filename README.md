@@ -4,6 +4,14 @@ Here is my Twibot project.
 
 The aim of this project is to make a bot able to play a game named Twinit using AI and some image processing techniques.
 
+Here is provided two versions: 
+- One in Python, one can execute with `python main.py`
+- The other one in C++ version in `twibotcpp`.
+
+The C++ version is faster than the Python version. 
+I also worked on it more. 
+I recommend using it than the Python version.
+
 ## What is Twinit?
 
 Twinit is a game where the goal is to be the faster among your opponents to point out two identical cards. 
